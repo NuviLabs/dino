@@ -214,14 +214,6 @@ class DeformableTransformer(nn.Module):
 
         # evolution of anchors
         self.dec_layer_number = dec_layer_number
-        if dec_layer_number is not None:
-            if self.two_stage_type != 'no' or num_patterns == 0:
-                assert dec_layer_number[
-                           0] == num_queries, f"dec_layer_number[0]({dec_layer_number[0]}) != num_queries({num_queries})"
-            else:
-                assert dec_layer_number[
-                           0] == num_queries * num_patterns, f"dec_layer_number[0]({dec_layer_number[0]}) != num_queries({num_queries}) * num_patterns({num_patterns})"
-
         self._reset_parameters()
 
         self.rm_self_attn_layers = rm_self_attn_layers
@@ -554,6 +546,7 @@ class TransformerDecoder(nn.Module):
                  ):
         super().__init__()
         assert num_layers > 0
+        assert deformable_decoder is True
         self.layers = _get_clones(decoder_layer, num_layers, layer_share=dec_layer_share)
         self.num_layers = num_layers
         self.norm = norm
@@ -565,16 +558,9 @@ class TransformerDecoder(nn.Module):
         self.use_detached_boxes_dec_out = use_detached_boxes_dec_out
 
         self.ref_point_head = MLP(query_dim // 2 * d_model, d_model, d_model, 2)
-        if not deformable_decoder:
-            self.query_pos_sine_scale = MLP(d_model, d_model, d_model, 2)
-        else:
-            self.query_pos_sine_scale = None
+        self.query_pos_sine_scale = None
 
-        if rm_dec_query_scale:
-            self.query_scale = None
-        else:
-            raise NotImplementedError
-            self.query_scale = MLP(d_model, d_model, d_model, 2)
+        self.query_scale = None
         self.bbox_embed = None
         self.class_embed = None
 
@@ -582,26 +568,13 @@ class TransformerDecoder(nn.Module):
         self.modulate_hw_attn = modulate_hw_attn
         self.deformable_decoder = deformable_decoder
 
-        if not deformable_decoder and modulate_hw_attn:
-            self.ref_anchor_head = MLP(d_model, d_model, 2, 2)
-        else:
-            self.ref_anchor_head = None
+        self.ref_anchor_head = None
 
         self.decoder_query_perturber = decoder_query_perturber
         self.box_pred_damping = None
 
         self.dec_layer_number = dec_layer_number
-        if dec_layer_number is not None:
-            assert isinstance(dec_layer_number, list)
-            assert len(dec_layer_number) == num_layers
-
         self.dec_layer_dropout_prob = dec_layer_dropout_prob
-        if dec_layer_dropout_prob is not None:
-            assert isinstance(dec_layer_dropout_prob, list)
-            assert len(dec_layer_dropout_prob) == num_layers
-            for i in dec_layer_dropout_prob:
-                assert 0.0 <= i <= 1.0
-
         self.rm_detach = None
 
     def forward(self,
@@ -638,56 +611,38 @@ class TransformerDecoder(nn.Module):
             if self.training and self.decoder_query_perturber is not None and layer_id != 0:
                 reference_points = self.decoder_query_perturber(reference_points)
 
-            if self.deformable_decoder:
-                if reference_points.shape[-1] == 4:
-                    reference_points_input = reference_points[:, :, None] \
-                                             * torch.cat([valid_ratios, valid_ratios], -1)[None, :]  # nq, bs, nlevel, 4
-                else:
-                    assert reference_points.shape[-1] == 2
-                    reference_points_input = reference_points[:, :, None] * valid_ratios[None, :]
-                query_sine_embed = gen_sineembed_for_position(reference_points_input[:, :, 0, :])  # nq, bs, 256*2
+            if reference_points.shape[-1] == 4:
+                reference_points_input = reference_points[:, :, None] \
+                                         * torch.cat([valid_ratios, valid_ratios], -1)[None, :]  # nq, bs, nlevel, 4
             else:
-                query_sine_embed = gen_sineembed_for_position(reference_points)  # nq, bs, 256*2
-                reference_points_input = None
+                assert reference_points.shape[-1] == 2
+                reference_points_input = reference_points[:, :, None] * valid_ratios[None, :]
+            query_sine_embed = gen_sineembed_for_position(reference_points_input[:, :, 0, :])  # nq, bs, 256*2
+
 
             # conditional query
             raw_query_pos = self.ref_point_head(query_sine_embed)  # nq, bs, 256
             pos_scale = self.query_scale(output) if self.query_scale is not None else 1
             query_pos = pos_scale * raw_query_pos
-            if not self.deformable_decoder:
-                query_sine_embed = query_sine_embed[..., :self.d_model] * self.query_pos_sine_scale(output)
-
-            # modulated HW attentions
-            if not self.deformable_decoder and self.modulate_hw_attn:
-                refHW_cond = self.ref_anchor_head(output).sigmoid()  # nq, bs, 2
-                query_sine_embed[..., self.d_model // 2:] *= (refHW_cond[..., 0] / reference_points[..., 2]).unsqueeze(
-                    -1)
-                query_sine_embed[..., :self.d_model // 2] *= (refHW_cond[..., 1] / reference_points[..., 3]).unsqueeze(
-                    -1)
 
             # random drop some layers if needed
-            dropflag = False
-            if self.dec_layer_dropout_prob is not None:
-                prob = random.random()
-                if prob < self.dec_layer_dropout_prob[layer_id]:
-                    dropflag = True
-            if not dropflag:
-                output = layer(
-                    tgt=output,
-                    tgt_query_pos=query_pos,
-                    tgt_query_sine_embed=query_sine_embed,
-                    tgt_key_padding_mask=tgt_key_padding_mask,
-                    tgt_reference_points=reference_points_input,
+            output = layer(
+                tgt=output,
+                tgt_query_pos=query_pos,
+                tgt_query_sine_embed=query_sine_embed,
+                tgt_key_padding_mask=tgt_key_padding_mask,
+                tgt_reference_points=reference_points_input,
 
-                    memory=memory,
-                    memory_key_padding_mask=memory_key_padding_mask,
-                    memory_level_start_index=level_start_index,
-                    memory_spatial_shapes=spatial_shapes,
-                    memory_pos=pos,
+                memory=memory,
+                memory_key_padding_mask=memory_key_padding_mask,
+                memory_level_start_index=level_start_index,
+                memory_spatial_shapes=spatial_shapes,
+                memory_pos=pos,
 
-                    self_attn_mask=tgt_mask,
-                    cross_attn_mask=memory_mask
-                )
+                self_attn_mask=tgt_mask,
+                cross_attn_mask=memory_mask
+            )
+
 
             # iter update
             if self.bbox_embed is not None:
@@ -695,16 +650,6 @@ class TransformerDecoder(nn.Module):
                 delta_unsig = self.bbox_embed[layer_id](output)
                 outputs_unsig = delta_unsig + reference_before_sigmoid
                 new_reference_points = outputs_unsig.sigmoid()
-
-                # select # ref points
-                if self.dec_layer_number is not None and layer_id != self.num_layers - 1:
-                    nq_now = new_reference_points.shape[0]
-                    select_number = self.dec_layer_number[layer_id + 1]
-                    if nq_now != select_number:
-                        class_unselected = self.class_embed[layer_id](output)  # nq, bs, 91
-                        topk_proposals = torch.topk(class_unselected.max(-1)[0], select_number, dim=0)[1]  # new_nq, bs
-                        new_reference_points = torch.gather(new_reference_points, 0,
-                                                            topk_proposals.unsqueeze(-1).repeat(1, 1, 4))  # unsigmoid
 
                 if self.rm_detach and 'dec' in self.rm_detach:
                     reference_points = new_reference_points
@@ -716,10 +661,6 @@ class TransformerDecoder(nn.Module):
                     ref_points.append(new_reference_points)
 
             intermediate.append(self.norm(output))
-            if self.dec_layer_number is not None and layer_id != self.num_layers - 1:
-                if nq_now != select_number:
-                    output = torch.gather(output, 0,
-                                          topk_proposals.unsqueeze(-1).repeat(1, 1, self.d_model))  # unsigmoid
 
         return [
             [itm_out.transpose(0, 1) for itm_out in intermediate],
@@ -847,10 +788,10 @@ class DeformableTransformerDecoderLayer(nn.Module):
         self.norm2 = None
 
     @staticmethod
-    def with_pos_embed(tensor, pos: Optional[Tensor] = None):
+    def with_pos_embed(tensor, pos):
         return tensor if pos is None else tensor + pos
 
-    def forward_ffn(self, tgt: Tensor):
+    def forward_ffn(self, tgt):
         tgt2 = self.linear2(self.dropout3(self.activation(self.linear1(tgt))))
         tgt = tgt + self.dropout4(tgt2)
         tgt = self.norm3(tgt)
@@ -858,18 +799,18 @@ class DeformableTransformerDecoderLayer(nn.Module):
 
     def forward_sa(self,
                    # for tgt
-                   tgt: Tensor,  # nq, bs, d_model
-                   tgt_query_pos: Optional[Tensor] = None,  # pos for query. MLP(Sine(pos))
-                   tgt_reference_points: Optional[Tensor] = None,  # nq, bs, 4
+                   tgt,  # nq, bs, d_model
+                   tgt_query_pos,  # pos for query. MLP(Sine(pos))
+                   tgt_reference_points,  # nq, bs, 4
 
                    # for memory
-                   memory: Optional[Tensor] = None,  # hw, bs, d_model
-                   memory_key_padding_mask: Optional[Tensor] = None,
-                   memory_level_start_index: Optional[Tensor] = None,  # num_levels
-                   memory_spatial_shapes: Optional[Tensor] = None,  # bs, num_levels, 2
+                   memory,  # hw, bs, d_model
+                   memory_key_padding_mask,
+                   memory_level_start_index,  # num_levels
+                   memory_spatial_shapes,  # bs, num_levels, 2
 
                    # sa
-                   self_attn_mask: Optional[Tensor] = None,  # mask used for self-attention
+                   self_attn_mask,  # mask used for self-attention
                    ):
         # self attention
         if self.self_attn is not None:
@@ -900,15 +841,15 @@ class DeformableTransformerDecoderLayer(nn.Module):
 
     def forward_ca(self,
                    # for tgt
-                   tgt: Tensor,  # nq, bs, d_model
-                   tgt_query_pos: Optional[Tensor] = None,  # pos for query. MLP(Sine(pos))
-                   tgt_reference_points: Optional[Tensor] = None,  # nq, bs, 4
+                   tgt,  # nq, bs, d_model
+                   tgt_query_pos,  # pos for query. MLP(Sine(pos))
+                   tgt_reference_points,  # nq, bs, 4
 
                    # for memory
-                   memory: Optional[Tensor] = None,  # hw, bs, d_model
-                   memory_key_padding_mask: Optional[Tensor] = None,
-                   memory_level_start_index: Optional[Tensor] = None,  # num_levels
-                   memory_spatial_shapes: Optional[Tensor] = None,  # bs, num_levels, 2
+                   memory,  # hw, bs, d_model
+                   memory_key_padding_mask,
+                   memory_level_start_index,  # num_levels
+                   memory_spatial_shapes,  # bs, num_levels, 2
                    ):
         # cross attention
         if self.key_aware_type is not None:
@@ -932,22 +873,22 @@ class DeformableTransformerDecoderLayer(nn.Module):
 
     def forward(self,
                 # for tgt
-                tgt: Tensor,  # nq, bs, d_model
-                tgt_query_pos: Optional[Tensor] = None,  # pos for query. MLP(Sine(pos))
-                tgt_query_sine_embed: Optional[Tensor] = None,  # pos for query. Sine(pos)
-                tgt_key_padding_mask: Optional[Tensor] = None,
-                tgt_reference_points: Optional[Tensor] = None,  # nq, bs, 4
+                tgt,  # nq, bs, d_model
+                tgt_query_pos,  # pos for query. MLP(Sine(pos))
+                tgt_query_sine_embed,  # pos for query. Sine(pos)
+                tgt_key_padding_mask,
+                tgt_reference_points,  # nq, bs, 4
 
                 # for memory
-                memory: Optional[Tensor] = None,  # hw, bs, d_model
-                memory_key_padding_mask: Optional[Tensor] = None,
-                memory_level_start_index: Optional[Tensor] = None,  # num_levels
-                memory_spatial_shapes: Optional[Tensor] = None,  # bs, num_levels, 2
-                memory_pos: Optional[Tensor] = None,  # pos for memory
+                memory,  # hw, bs, d_model
+                memory_key_padding_mask,
+                memory_level_start_index,  # num_levels
+                memory_spatial_shapes,  # bs, num_levels, 2
+                memory_pos,  # pos for memory
 
                 # sa
-                self_attn_mask: Optional[Tensor] = None,  # mask used for self-attention
-                cross_attn_mask: Optional[Tensor] = None,  # mask used for cross-attention
+                self_attn_mask,  # mask used for self-attention
+                cross_attn_mask,  # mask used for cross-attention
                 ):
 
         for funcname in self.module_seq:
