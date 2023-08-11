@@ -403,7 +403,9 @@ class DeformableTransformer(nn.Module):
             refpoints_unsigmoid=refpoint_embed.transpose(0, 1),
             level_start_index=level_start_index,
             spatial_shapes=spatial_shapes,
-            valid_ratios=valid_ratios, tgt_mask=attn_mask)
+            valid_ratios=valid_ratios,
+            tgt_mask=attn_mask
+        )
         #########################################################
         # End Decoder
         # hs: n_dec, bs, nq, d_model
@@ -750,7 +752,7 @@ class DeformableTransformerDecoderLayer(nn.Module):
                  use_deformable_box_attn=False,
                  box_attn_type='roi_align',
                  key_aware_type=None,
-                 decoder_sa_type='ca',
+                 decoder_sa_type='sa',
                  module_seq=['sa', 'ca', 'ffn'],
                  ):
         super().__init__()
@@ -779,9 +781,6 @@ class DeformableTransformerDecoderLayer(nn.Module):
         self.decoder_sa_type = decoder_sa_type
         assert decoder_sa_type in ['sa', 'ca_label', 'ca_content']
 
-        if decoder_sa_type == 'ca_content':
-            self.self_attn = MSDeformAttn(d_model, n_levels, n_heads, n_points)
-
     def rm_self_attn_modules(self):
         self.self_attn = None
         self.dropout2 = None
@@ -798,44 +797,15 @@ class DeformableTransformerDecoderLayer(nn.Module):
         return tgt
 
     def forward_sa(self,
-                   # for tgt
-                   tgt,  # nq, bs, d_model
-                   tgt_query_pos,  # pos for query. MLP(Sine(pos))
-                   tgt_reference_points,  # nq, bs, 4
-
-                   # for memory
-                   memory,  # hw, bs, d_model
-                   memory_key_padding_mask,
-                   memory_level_start_index,  # num_levels
-                   memory_spatial_shapes,  # bs, num_levels, 2
-
-                   # sa
-                   self_attn_mask,  # mask used for self-attention
-                   ):
+                   tgt,
+                   tgt_query_pos,
+                   self_attn_mask):
         # self attention
         if self.self_attn is not None:
-            if self.decoder_sa_type == 'sa':
-                q = k = self.with_pos_embed(tgt, tgt_query_pos)
-                tgt2 = self.self_attn(q, k, tgt, attn_mask=self_attn_mask)[0]
-                tgt = tgt + self.dropout2(tgt2)
-                tgt = self.norm2(tgt)
-            elif self.decoder_sa_type == 'ca_label':
-                bs = tgt.shape[1]
-                k = v = self.label_embedding.weight[:, None, :].repeat(1, bs, 1)
-                tgt2 = self.self_attn(tgt, k, v, attn_mask=self_attn_mask)[0]
-                tgt = tgt + self.dropout2(tgt2)
-                tgt = self.norm2(tgt)
-            elif self.decoder_sa_type == 'ca_content':
-                tgt2 = self.self_attn(self.with_pos_embed(tgt, tgt_query_pos).transpose(0, 1),
-                                      tgt_reference_points.transpose(0, 1).contiguous(),
-                                      memory.transpose(0, 1),
-                                      memory_spatial_shapes,
-                                      memory_level_start_index,
-                                      memory_key_padding_mask).transpose(0, 1)
-                tgt = tgt + self.dropout2(tgt2)
-                tgt = self.norm2(tgt)
-            else:
-                raise NotImplementedError("Unknown decoder_sa_type {}".format(self.decoder_sa_type))
+            q = k = self.with_pos_embed(tgt, tgt_query_pos)
+            tgt2 = self.self_attn(q, k, tgt, attn_mask=self_attn_mask)[0]
+            tgt = tgt + self.dropout2(tgt2)
+            tgt = self.norm2(tgt)
 
         return tgt
 
@@ -905,11 +875,6 @@ class DeformableTransformerDecoderLayer(nn.Module):
             elif funcname == 'sa':
                 tgt = self.forward_sa(tgt,
                                       tgt_query_pos,
-                                      tgt_reference_points,
-                                      memory,
-                                      memory_key_padding_mask,
-                                      memory_level_start_index,
-                                      memory_spatial_shapes,
                                       self_attn_mask)
             else:
                 raise ValueError('unknown funcname {}'.format(funcname))
