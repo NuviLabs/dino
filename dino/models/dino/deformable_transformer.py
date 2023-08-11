@@ -25,14 +25,19 @@ from .ops.modules import MSDeformAttn
 
 class DeformableTransformer(nn.Module):
 
-    def __init__(self, d_model=256, nhead=8,
+    def __init__(self,
+                 d_model=256,
+                 nhead=8,
                  num_queries=300,
                  num_encoder_layers=6,
                  num_unicoder_layers=0,
                  num_decoder_layers=6,
-                 dim_feedforward=2048, dropout=0.0,
-                 activation="relu", normalize_before=False,
-                 return_intermediate_dec=False, query_dim=4,
+                 dim_feedforward=2048,
+                 dropout=0.0,
+                 activation="relu",
+                 normalize_before=False,
+                 return_intermediate_dec=False,
+                 query_dim=4,
                  num_patterns=0,
                  modulate_hw_attn=False,
                  # for deformable encoder
@@ -69,7 +74,6 @@ class DeformableTransformer(nn.Module):
                  module_seq=['sa', 'ca', 'ffn'],
                  # for dn
                  embed_init_tgt=False,
-
                  use_detached_boxes_dec_out=False,
                  ):
         super().__init__()
@@ -104,42 +108,55 @@ class DeformableTransformer(nn.Module):
         self.decoder_sa_type = decoder_sa_type
         assert decoder_sa_type in ['sa', 'ca_label', 'ca_content']
 
-        encoder_layer = DeformableTransformerEncoderLayer(d_model, dim_feedforward,
-                                                          dropout, activation,
-                                                          num_feature_levels, nhead, enc_n_points,
+        encoder_layer = DeformableTransformerEncoderLayer(d_model,
+                                                          dim_feedforward,
+                                                          dropout,
+                                                          activation,
+                                                          num_feature_levels,
+                                                          nhead,
+                                                          enc_n_points,
                                                           add_channel_attention=add_channel_attention,
                                                           use_deformable_box_attn=use_deformable_box_attn,
                                                           box_attn_type=box_attn_type)
         encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
         self.encoder = TransformerEncoder(
-            encoder_layer, num_encoder_layers,
-            encoder_norm, d_model=d_model,
+            encoder_layer,
+            num_encoder_layers,
+            encoder_norm,
+            d_model=d_model,
             num_queries=num_queries,
             deformable_encoder=deformable_encoder,
             enc_layer_share=enc_layer_share,
             two_stage_type=two_stage_type
         )
 
-        decoder_layer = DeformableTransformerDecoderLayer(d_model, dim_feedforward,
-                                                          dropout, activation,
-                                                          num_feature_levels, nhead, dec_n_points,
+        decoder_layer = DeformableTransformerDecoderLayer(d_model,
+                                                          dim_feedforward,
+                                                          dropout,
+                                                          activation,
+                                                          num_feature_levels,
+                                                          nhead,
+                                                          dec_n_points,
                                                           use_deformable_box_attn=use_deformable_box_attn,
                                                           box_attn_type=box_attn_type,
                                                           key_aware_type=key_aware_type,
                                                           decoder_sa_type=decoder_sa_type,
                                                           module_seq=module_seq)
         decoder_norm = nn.LayerNorm(d_model)
-        self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
+        self.decoder = TransformerDecoder(decoder_layer,
+                                          num_decoder_layers,
+                                          decoder_norm,
                                           return_intermediate=return_intermediate_dec,
-                                          d_model=d_model, query_dim=query_dim,
+                                          d_model=d_model,
+                                          query_dim=query_dim,
                                           modulate_hw_attn=modulate_hw_attn,
                                           num_feature_levels=num_feature_levels,
                                           deformable_decoder=deformable_decoder,
                                           decoder_query_perturber=decoder_query_perturber,
-                                          dec_layer_number=dec_layer_number, rm_dec_query_scale=rm_dec_query_scale,
+                                          dec_layer_number=dec_layer_number,
+                                          rm_dec_query_scale=rm_dec_query_scale,
                                           dec_layer_share=dec_layer_share,
-                                          use_detached_boxes_dec_out=use_detached_boxes_dec_out
-                                          )
+                                          use_detached_boxes_dec_out=use_detached_boxes_dec_out)
 
         self.d_model = d_model
         self.nhead = nhead
@@ -287,9 +304,6 @@ class DeformableTransformer(nn.Module):
         level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
         valid_ratios = torch.stack([self.get_valid_ratio(m) for m in masks], 1)
 
-        # two stage
-        enc_topk_proposals = enc_refpoint_embed = None
-
         #########################################################
         # Begin Encoder
         #########################################################
@@ -300,8 +314,7 @@ class DeformableTransformer(nn.Module):
             spatial_shapes=spatial_shapes,
             valid_ratios=valid_ratios,
             key_padding_mask=mask_flatten,
-            ref_token_index=enc_topk_proposals,  # bs, nq
-            ref_token_coord=enc_refpoint_embed,  # bs, nq, 4
+            ref_token_index=None,  # bs, nq
         )
         #########################################################
         # End Encoder
@@ -436,34 +449,25 @@ class DeformableTransformer(nn.Module):
 class TransformerEncoder(nn.Module):
 
     def __init__(self,
-                 encoder_layer, num_layers, norm=None, d_model=256,
+                 encoder_layer,
+                 num_layers,
+                 norm=None,
+                 d_model=256,
                  num_queries=300,
                  deformable_encoder=True,
-                 enc_layer_share=False, enc_layer_dropout_prob=None,
+                 enc_layer_share=False,
                  two_stage_type='no',  # ['no', 'standard', 'early', 'combine', 'enceachlayer', 'enclayer1']
                  ):
         super().__init__()
         # prepare layers
-        if num_layers > 0:
-            self.layers = _get_clones(encoder_layer, num_layers, layer_share=enc_layer_share)
-        else:
-            self.layers = []
-            del encoder_layer
-
+        assert num_layers > 0
+        self.layers = _get_clones(encoder_layer, num_layers, layer_share=enc_layer_share)
         self.query_scale = None
         self.num_queries = num_queries
         self.deformable_encoder = deformable_encoder
         self.num_layers = num_layers
         self.norm = norm
         self.d_model = d_model
-
-        self.enc_layer_dropout_prob = enc_layer_dropout_prob
-        if enc_layer_dropout_prob is not None:
-            assert isinstance(enc_layer_dropout_prob, list)
-            assert len(enc_layer_dropout_prob) == num_layers
-            for i in enc_layer_dropout_prob:
-                assert 0.0 <= i <= 1.0
-
         self.two_stage_type = two_stage_type
 
     @staticmethod
@@ -493,7 +497,6 @@ class TransformerEncoder(nn.Module):
                 valid_ratios: Tensor,
                 key_padding_mask: Tensor,
                 ref_token_index: Optional[Tensor] = None,
-                ref_token_coord: Optional[Tensor] = None
                 ):
         """
         Input:
@@ -505,7 +508,6 @@ class TransformerEncoder(nn.Module):
             - key_padding_mask: [bs, sum(hi*wi)]
 
             - ref_token_index: bs, nq
-            - ref_token_coord: bs, nq, 4
         Intermedia:
             - reference_points: [bs, sum(hi*wi), num_level, 2]
         Outpus: 
@@ -513,25 +515,16 @@ class TransformerEncoder(nn.Module):
         """
         assert ref_token_index is None
         output = src
-        # preparation and reshape
-        if self.num_layers > 0:
-            reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)
-        else:
-            reference_points = None
+        reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)
 
         # main process
         for layer_id, layer in enumerate(self.layers):
-            # main process
-            dropflag = False
-            if self.enc_layer_dropout_prob is not None:
-                prob = random.random()
-                if prob < self.enc_layer_dropout_prob[layer_id]:
-                    dropflag = True
-
-            if not dropflag:
-                output = layer(src=output, pos=pos, reference_points=reference_points,
-                               spatial_shapes=spatial_shapes, level_start_index=level_start_index,
-                               key_padding_mask=key_padding_mask)
+            output = layer(src=output,
+                           pos=pos,
+                           reference_points=reference_points,
+                           spatial_shapes=spatial_shapes,
+                           level_start_index=level_start_index,
+                           key_padding_mask=key_padding_mask)
 
         if self.norm is not None:
             output = self.norm(output)
@@ -542,9 +535,13 @@ class TransformerEncoder(nn.Module):
 
 class TransformerDecoder(nn.Module):
 
-    def __init__(self, decoder_layer, num_layers, norm=None,
+    def __init__(self,
+                 decoder_layer,
+                 num_layers,
+                 norm=None,
                  return_intermediate=False,
-                 d_model=256, query_dim=4,
+                 d_model=256,
+                 query_dim=4,
                  modulate_hw_attn=False,
                  num_feature_levels=1,
                  deformable_decoder=False,
@@ -556,10 +553,8 @@ class TransformerDecoder(nn.Module):
                  use_detached_boxes_dec_out=False
                  ):
         super().__init__()
-        if num_layers > 0:
-            self.layers = _get_clones(decoder_layer, num_layers, layer_share=dec_layer_share)
-        else:
-            self.layers = []
+        assert num_layers > 0
+        self.layers = _get_clones(decoder_layer, num_layers, layer_share=dec_layer_share)
         self.num_layers = num_layers
         self.norm = norm
         self.return_intermediate = return_intermediate
@@ -609,7 +604,9 @@ class TransformerDecoder(nn.Module):
 
         self.rm_detach = None
 
-    def forward(self, tgt, memory,
+    def forward(self,
+                tgt,
+                memory,
                 tgt_mask: Optional[Tensor] = None,
                 memory_mask: Optional[Tensor] = None,
                 tgt_key_padding_mask: Optional[Tensor] = None,
@@ -732,9 +729,13 @@ class TransformerDecoder(nn.Module):
 
 class DeformableTransformerEncoderLayer(nn.Module):
     def __init__(self,
-                 d_model=256, d_ffn=1024,
-                 dropout=0.1, activation="relu",
-                 n_levels=4, n_heads=8, n_points=4,
+                 d_model=256,
+                 d_ffn=1024,
+                 dropout=0.1,
+                 activation="relu",
+                 n_levels=4,
+                 n_heads=8,
+                 n_points=4,
                  add_channel_attention=False,
                  use_deformable_box_attn=False,
                  box_attn_type='roi_align',
@@ -769,9 +770,19 @@ class DeformableTransformerEncoderLayer(nn.Module):
         src = self.norm2(src)
         return src
 
-    def forward(self, src, pos, reference_points, spatial_shapes, level_start_index, key_padding_mask=None):
+    def forward(self,
+                src,
+                pos,
+                reference_points,
+                spatial_shapes,
+                level_start_index,
+                key_padding_mask=None):
         # self attention
-        src2 = self.self_attn(self.with_pos_embed(src, pos), reference_points, src, spatial_shapes, level_start_index,
+        src2 = self.self_attn(self.with_pos_embed(src, pos),
+                              reference_points,
+                              src,
+                              spatial_shapes,
+                              level_start_index,
                               key_padding_mask)
         src = src + self.dropout1(src2)
         src = self.norm1(src)
@@ -787,9 +798,14 @@ class DeformableTransformerEncoderLayer(nn.Module):
 
 
 class DeformableTransformerDecoderLayer(nn.Module):
-    def __init__(self, d_model=256, d_ffn=1024,
-                 dropout=0.1, activation="relu",
-                 n_levels=4, n_heads=8, n_points=4,
+    def __init__(self,
+                 d_model=256,
+                 d_ffn=1024,
+                 dropout=0.1,
+                 activation="relu",
+                 n_levels=4,
+                 n_heads=8,
+                 n_points=4,
                  use_deformable_box_attn=False,
                  box_attn_type='roi_align',
                  key_aware_type=None,
@@ -875,7 +891,9 @@ class DeformableTransformerDecoderLayer(nn.Module):
             elif self.decoder_sa_type == 'ca_content':
                 tgt2 = self.self_attn(self.with_pos_embed(tgt, tgt_query_pos).transpose(0, 1),
                                       tgt_reference_points.transpose(0, 1).contiguous(),
-                                      memory.transpose(0, 1), memory_spatial_shapes, memory_level_start_index,
+                                      memory.transpose(0, 1),
+                                      memory_spatial_shapes,
+                                      memory_level_start_index,
                                       memory_key_padding_mask).transpose(0, 1)
                 tgt = tgt + self.dropout2(tgt2)
                 tgt = self.norm2(tgt)
@@ -914,7 +932,9 @@ class DeformableTransformerDecoderLayer(nn.Module):
                 raise NotImplementedError("Unknown key_aware_type: {}".format(self.key_aware_type))
         tgt2 = self.cross_attn(self.with_pos_embed(tgt, tgt_query_pos).transpose(0, 1),
                                tgt_reference_points.transpose(0, 1).contiguous(),
-                               memory.transpose(0, 1), memory_spatial_shapes, memory_level_start_index,
+                               memory.transpose(0, 1),
+                               memory_spatial_shapes,
+                               memory_level_start_index,
                                memory_key_padding_mask).transpose(0, 1)
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
@@ -945,15 +965,30 @@ class DeformableTransformerDecoderLayer(nn.Module):
             if funcname == 'ffn':
                 tgt = self.forward_ffn(tgt)
             elif funcname == 'ca':
-                tgt = self.forward_ca(tgt, tgt_query_pos, tgt_query_sine_embed, \
-                                      tgt_key_padding_mask, tgt_reference_points, \
-                                      memory, memory_key_padding_mask, memory_level_start_index, \
-                                      memory_spatial_shapes, memory_pos, self_attn_mask, cross_attn_mask)
+                tgt = self.forward_ca(tgt,
+                                      tgt_query_pos,
+                                      tgt_query_sine_embed,
+                                      tgt_key_padding_mask,
+                                      tgt_reference_points,
+                                      memory,
+                                      memory_key_padding_mask,
+                                      memory_level_start_index,
+                                      memory_spatial_shapes,
+                                      memory_pos,
+                                      self_attn_mask,
+                                      cross_attn_mask)
             elif funcname == 'sa':
-                tgt = self.forward_sa(tgt, tgt_query_pos, tgt_query_sine_embed, \
-                                      tgt_key_padding_mask, tgt_reference_points, \
-                                      memory, memory_key_padding_mask, memory_level_start_index, \
-                                      memory_spatial_shapes, memory_pos, self_attn_mask, cross_attn_mask)
+                tgt = self.forward_sa(tgt, tgt_query_pos,
+                                      tgt_query_sine_embed,
+                                      tgt_key_padding_mask,
+                                      tgt_reference_points,
+                                      memory,
+                                      memory_key_padding_mask,
+                                      memory_level_start_index,
+                                      memory_spatial_shapes,
+                                      memory_pos,
+                                      self_attn_mask,
+                                      cross_attn_mask)
             else:
                 raise ValueError('unknown funcname {}'.format(funcname))
 
@@ -972,8 +1007,10 @@ def build_deformable_transformer(args):
     if args.decoder_layer_noise:
         from .utils import RandomBoxPerturber
         decoder_query_perturber = RandomBoxPerturber(
-            x_noise_scale=args.dln_xy_noise, y_noise_scale=args.dln_xy_noise,
-            w_noise_scale=args.dln_hw_noise, h_noise_scale=args.dln_hw_noise)
+            x_noise_scale=args.dln_xy_noise,
+            y_noise_scale=args.dln_xy_noise,
+            w_noise_scale=args.dln_hw_noise,
+            h_noise_scale=args.dln_hw_noise)
     try:
         use_detached_boxes_dec_out = args.use_detached_boxes_dec_out
     except:
