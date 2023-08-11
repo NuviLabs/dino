@@ -36,8 +36,8 @@ class DeformableTransformer(nn.Module):
                  num_patterns=0,
                  modulate_hw_attn=False,
                  # for deformable encoder
-                 deformable_encoder=False,
-                 deformable_decoder=False,
+                 deformable_encoder=True,
+                 deformable_decoder=True,
                  num_feature_levels=1,
                  enc_n_points=4,
                  dec_n_points=4,
@@ -438,7 +438,7 @@ class TransformerEncoder(nn.Module):
     def __init__(self,
                  encoder_layer, num_layers, norm=None, d_model=256,
                  num_queries=300,
-                 deformable_encoder=False,
+                 deformable_encoder=True,
                  enc_layer_share=False, enc_layer_dropout_prob=None,
                  two_stage_type='no',  # ['no', 'standard', 'early', 'combine', 'enceachlayer', 'enclayer1']
                  ):
@@ -515,8 +515,9 @@ class TransformerEncoder(nn.Module):
         output = src
         # preparation and reshape
         if self.num_layers > 0:
-            if self.deformable_encoder:
-                reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)
+            reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)
+        else:
+            reference_points = None
 
         # main process
         for layer_id, layer in enumerate(self.layers):
@@ -528,13 +529,9 @@ class TransformerEncoder(nn.Module):
                     dropflag = True
 
             if not dropflag:
-                if self.deformable_encoder:
-                    output = layer(src=output, pos=pos, reference_points=reference_points,
-                                   spatial_shapes=spatial_shapes, level_start_index=level_start_index,
-                                   key_padding_mask=key_padding_mask)
-                else:
-                    output = layer(src=output.transpose(0, 1), pos=pos.transpose(0, 1),
-                                   key_padding_mask=key_padding_mask).transpose(0, 1)
+                output = layer(src=output, pos=pos, reference_points=reference_points,
+                               spatial_shapes=spatial_shapes, level_start_index=level_start_index,
+                               key_padding_mask=key_padding_mask)
 
         if self.norm is not None:
             output = self.norm(output)
