@@ -465,15 +465,6 @@ class TransformerEncoder(nn.Module):
                 assert 0.0 <= i <= 1.0
 
         self.two_stage_type = two_stage_type
-        if two_stage_type in ['enceachlayer', 'enclayer1']:
-            _proj_layer = nn.Linear(d_model, d_model)
-            _norm_layer = nn.LayerNorm(d_model)
-            if two_stage_type == 'enclayer1':
-                self.enc_norm = nn.ModuleList([_norm_layer])
-                self.enc_proj = nn.ModuleList([_proj_layer])
-            else:
-                self.enc_norm = nn.ModuleList([copy.deepcopy(_norm_layer) for i in range(num_layers - 1)])
-                self.enc_proj = nn.ModuleList([copy.deepcopy(_proj_layer) for i in range(num_layers - 1)])
 
     @staticmethod
     def get_reference_points(spatial_shapes: Tensor,
@@ -520,21 +511,12 @@ class TransformerEncoder(nn.Module):
         Outpus: 
             - output: [bs, sum(hi*wi), 256]
         """
-        if self.two_stage_type in ['no', 'standard', 'enceachlayer', 'enclayer1']:
-            assert ref_token_index is None
-
+        assert ref_token_index is None
         output = src
         # preparation and reshape
         if self.num_layers > 0:
             if self.deformable_encoder:
                 reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)
-
-        intermediate_output = []
-        intermediate_ref = []
-        if ref_token_index is not None:
-            out_i = torch.gather(output, 1, ref_token_index.unsqueeze(-1).repeat(1, 1, self.d_model))
-            intermediate_output.append(out_i)
-            intermediate_ref.append(ref_token_coord)
 
         # main process
         for layer_id, layer in enumerate(self.layers):
@@ -554,35 +536,10 @@ class TransformerEncoder(nn.Module):
                     output = layer(src=output.transpose(0, 1), pos=pos.transpose(0, 1),
                                    key_padding_mask=key_padding_mask).transpose(0, 1)
 
-            if ((layer_id == 0 and self.two_stage_type in ['enceachlayer', 'enclayer1']) \
-                or (self.two_stage_type == 'enceachlayer')) \
-                    and (layer_id != self.num_layers - 1):
-                output_memory, output_proposals = gen_encoder_output_proposals(output, key_padding_mask, spatial_shapes)
-                output_memory = self.enc_norm[layer_id](self.enc_proj[layer_id](output_memory))
-
-                # gather boxes
-                topk = self.num_queries
-                enc_outputs_class = self.class_embed[layer_id](output_memory)
-                ref_token_index = torch.topk(enc_outputs_class.max(-1)[0], topk, dim=1)[1]  # bs, nq
-                ref_token_coord = torch.gather(output_proposals, 1, ref_token_index.unsqueeze(-1).repeat(1, 1, 4))
-
-                output = output_memory
-
-            # aux loss
-            if (layer_id != self.num_layers - 1) and ref_token_index is not None:
-                out_i = torch.gather(output, 1, ref_token_index.unsqueeze(-1).repeat(1, 1, self.d_model))
-                intermediate_output.append(out_i)
-                intermediate_ref.append(ref_token_coord)
-
         if self.norm is not None:
             output = self.norm(output)
 
-        if ref_token_index is not None:
-            intermediate_output = torch.stack(intermediate_output)  # n_enc/n_enc-1, bs, \sum{hw}, d_model
-            intermediate_ref = torch.stack(intermediate_ref)
-        else:
-            intermediate_output = intermediate_ref = None
-
+        intermediate_output = intermediate_ref = None
         return output, intermediate_output, intermediate_ref
 
 

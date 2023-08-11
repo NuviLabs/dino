@@ -715,10 +715,8 @@ def build_dino(args):
     transformer = build_deformable_transformer(args)
 
     try:
-        match_unstable_error = args.match_unstable_error
         dn_labelbook_size = args.dn_labelbook_size
     except:
-        match_unstable_error = True
         dn_labelbook_size = num_classes
 
     try:
