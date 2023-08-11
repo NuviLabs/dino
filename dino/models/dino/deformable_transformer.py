@@ -104,16 +104,12 @@ class DeformableTransformer(nn.Module):
         self.decoder_sa_type = decoder_sa_type
         assert decoder_sa_type in ['sa', 'ca_label', 'ca_content']
 
-        # choose encoder layer type
-        if deformable_encoder:
-            encoder_layer = DeformableTransformerEncoderLayer(d_model, dim_feedforward,
-                                                              dropout, activation,
-                                                              num_feature_levels, nhead, enc_n_points,
-                                                              add_channel_attention=add_channel_attention,
-                                                              use_deformable_box_attn=use_deformable_box_attn,
-                                                              box_attn_type=box_attn_type)
-        else:
-            raise NotImplementedError
+        encoder_layer = DeformableTransformerEncoderLayer(d_model, dim_feedforward,
+                                                          dropout, activation,
+                                                          num_feature_levels, nhead, enc_n_points,
+                                                          add_channel_attention=add_channel_attention,
+                                                          use_deformable_box_attn=use_deformable_box_attn,
+                                                          box_attn_type=box_attn_type)
         encoder_norm = nn.LayerNorm(d_model) if normalize_before else None
         self.encoder = TransformerEncoder(
             encoder_layer, num_encoder_layers,
@@ -124,20 +120,14 @@ class DeformableTransformer(nn.Module):
             two_stage_type=two_stage_type
         )
 
-        # choose decoder layer type
-        if deformable_decoder:
-            decoder_layer = DeformableTransformerDecoderLayer(d_model, dim_feedforward,
-                                                              dropout, activation,
-                                                              num_feature_levels, nhead, dec_n_points,
-                                                              use_deformable_box_attn=use_deformable_box_attn,
-                                                              box_attn_type=box_attn_type,
-                                                              key_aware_type=key_aware_type,
-                                                              decoder_sa_type=decoder_sa_type,
-                                                              module_seq=module_seq)
-
-        else:
-            raise NotImplementedError
-
+        decoder_layer = DeformableTransformerDecoderLayer(d_model, dim_feedforward,
+                                                          dropout, activation,
+                                                          num_feature_levels, nhead, dec_n_points,
+                                                          use_deformable_box_attn=use_deformable_box_attn,
+                                                          box_attn_type=box_attn_type,
+                                                          key_aware_type=key_aware_type,
+                                                          decoder_sa_type=decoder_sa_type,
+                                                          module_seq=module_seq)
         decoder_norm = nn.LayerNorm(d_model)
         self.decoder = TransformerDecoder(decoder_layer, num_decoder_layers, decoder_norm,
                                           return_intermediate=return_intermediate_dec,
@@ -486,15 +476,20 @@ class TransformerEncoder(nn.Module):
                 self.enc_proj = nn.ModuleList([copy.deepcopy(_proj_layer) for i in range(num_layers - 1)])
 
     @staticmethod
-    def get_reference_points(spatial_shapes, valid_ratios, device):
+    def get_reference_points(spatial_shapes: Tensor,
+                             valid_ratios: Tensor,
+                             device: Optional[torch.device] = None):
         reference_points_list = []
-        for lvl, (H_, W_) in enumerate(spatial_shapes):
+
+        for lvl in range(len(spatial_shapes)):
+            H_, W_ = spatial_shapes[lvl][0], spatial_shapes[lvl][1]
             ref_y, ref_x = torch.meshgrid(torch.linspace(0.5, H_ - 0.5, H_, dtype=torch.float32, device=device),
                                           torch.linspace(0.5, W_ - 0.5, W_, dtype=torch.float32, device=device))
             ref_y = ref_y.reshape(-1)[None] / (valid_ratios[:, None, lvl, 1] * H_)
             ref_x = ref_x.reshape(-1)[None] / (valid_ratios[:, None, lvl, 0] * W_)
-            ref = torch.stack((ref_x, ref_y), -1)
+            ref = torch.stack([ref_x, ref_y], -1)
             reference_points_list.append(ref)
+
         reference_points = torch.cat(reference_points_list, 1)
         reference_points = reference_points[:, :, None] * valid_ratios[:, None]
         return reference_points
@@ -1025,8 +1020,6 @@ def build_deformable_transformer(args):
         decoder_query_perturber = RandomBoxPerturber(
             x_noise_scale=args.dln_xy_noise, y_noise_scale=args.dln_xy_noise,
             w_noise_scale=args.dln_hw_noise, h_noise_scale=args.dln_hw_noise)
-
-    use_detached_boxes_dec_out = False
     try:
         use_detached_boxes_dec_out = args.use_detached_boxes_dec_out
     except:
