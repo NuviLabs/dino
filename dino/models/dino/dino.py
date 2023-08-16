@@ -169,8 +169,6 @@ class DINO(nn.Module):
                 self.transformer.enc_out_class_embed = copy.deepcopy(_class_embed)
     
             self.refpoint_embed = None
-            if self.two_stage_add_query_num > 0:
-                self.init_ref_points(two_stage_add_query_num)
 
         self.decoder_sa_type = decoder_sa_type
         assert decoder_sa_type in ['sa', 'ca_label', 'ca_content']

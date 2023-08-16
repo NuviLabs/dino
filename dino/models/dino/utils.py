@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from torch import nn
 
 
-def gen_encoder_output_proposals(memory:Tensor, memory_padding_mask:Tensor, spatial_shapes:Tensor, learnedwh=None):
+def gen_encoder_output_proposals(memory:Tensor, memory_padding_mask:Tensor, spatial_shapes:Tensor):
     """
     Input:
         - memory: bs, \sum{hw}, d_model
@@ -27,7 +27,9 @@ def gen_encoder_output_proposals(memory:Tensor, memory_padding_mask:Tensor, spat
     base_scale = 4.0
     proposals = []
     _cur = 0
-    for lvl, (H_, W_) in enumerate(spatial_shapes):
+
+    for lvl in range(len(spatial_shapes)):
+        H_, W_ = spatial_shapes[lvl][0], spatial_shapes[lvl][1]
         mask_flatten_ = memory_padding_mask[:, _cur:(_cur + H_ * W_)].view(N_, H_, W_, 1)
         valid_H = torch.sum(~mask_flatten_[:, :, 0, 0], 1)
         valid_W = torch.sum(~mask_flatten_[:, 0, :, 0], 1)
@@ -39,11 +41,8 @@ def gen_encoder_output_proposals(memory:Tensor, memory_padding_mask:Tensor, spat
         scale = torch.cat([valid_W.unsqueeze(-1), valid_H.unsqueeze(-1)], 1).view(N_, 1, 1, 2)
         grid = (grid.unsqueeze(0).expand(N_, -1, -1, -1) + 0.5) / scale
 
-        if learnedwh is not None:
-            wh = torch.ones_like(grid) * learnedwh.sigmoid() * (2.0 ** lvl)
-        else:
-            wh = torch.ones_like(grid) * 0.05 * (2.0 ** lvl)
-
+        wh = torch.ones_like(grid) * 0.05 * (2.0 ** lvl)
+        
         proposal = torch.cat((grid, wh), -1).view(N_, -1, 4)
         proposals.append(proposal)
         _cur += (H_ * W_)
