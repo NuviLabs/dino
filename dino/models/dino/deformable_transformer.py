@@ -11,7 +11,8 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 # ------------------------------------------------------------------------
 
-import math, random
+import math
+import random
 import copy
 from typing import Optional, List, Tuple
 
@@ -55,7 +56,8 @@ class DeformableTransformer(nn.Module):
                  add_pos_value=False,
                  random_refpoints_xy=False,
                  # two stage
-                 two_stage_type='no',  # ['no', 'standard', 'early', 'combine', 'enceachlayer', 'enclayer1']
+                 # ['no', 'standard', 'early', 'combine', 'enceachlayer', 'enclayer1']
+                 two_stage_type='no',
                  two_stage_pat_embed=0,
                  two_stage_add_query_num=0,
                  two_stage_learn_wh=False,
@@ -164,12 +166,14 @@ class DeformableTransformer(nn.Module):
         self.num_queries = num_queries  # useful for single stage model only
         self.num_patterns = num_patterns
         if not isinstance(num_patterns, int):
-            Warning("num_patterns should be int but {}".format(type(num_patterns)))
+            Warning("num_patterns should be int but {}".format(
+                type(num_patterns)))
             self.num_patterns = 0
 
         if num_feature_levels > 1:
             if self.num_encoder_layers > 0:
-                self.level_embed = nn.Parameter(torch.Tensor(num_feature_levels, d_model))
+                self.level_embed = nn.Parameter(
+                    torch.Tensor(num_feature_levels, d_model))
             else:
                 self.level_embed = None
 
@@ -187,7 +191,8 @@ class DeformableTransformer(nn.Module):
         self.two_stage_pat_embed = two_stage_pat_embed
         self.two_stage_add_query_num = two_stage_add_query_num
         self.two_stage_learn_wh = two_stage_learn_wh
-        assert two_stage_type in ['no', 'standard'], "unknown param {} of two_stage_type".format(two_stage_type)
+        assert two_stage_type in [
+            'no', 'standard'], "unknown param {} of two_stage_type".format(two_stage_type)
         if two_stage_type == 'standard':
             # anchor selection at the output of encoder
             self.enc_output = nn.Linear(d_model, d_model)
@@ -206,7 +211,8 @@ class DeformableTransformer(nn.Module):
 
         self.rm_self_attn_layers = rm_self_attn_layers
         if rm_self_attn_layers is not None:
-            print("Removing the self-attn in {} decoder layers".format(rm_self_attn_layers))
+            print(
+                "Removing the self-attn in {} decoder layers".format(rm_self_attn_layers))
             for lid, dec_layer in enumerate(self.decoder.layers):
                 if lid in rm_self_attn_layers:
                     dec_layer.rm_self_attn_modules()
@@ -241,7 +247,8 @@ class DeformableTransformer(nn.Module):
 
         if self.random_refpoints_xy:
             self.refpoint_embed.weight.data[:, :2].uniform_(0, 1)
-            self.refpoint_embed.weight.data[:, :2] = inverse_sigmoid(self.refpoint_embed.weight.data[:, :2])
+            self.refpoint_embed.weight.data[:, :2] = inverse_sigmoid(
+                self.refpoint_embed.weight.data[:, :2])
             self.refpoint_embed.weight.data[:, :2].requires_grad = False
 
     def forward(self, srcs, masks, refpoint_embed, pos_embeds, tgt, attn_mask=None):
@@ -252,7 +259,7 @@ class DeformableTransformer(nn.Module):
             - refpoint_embed: [bs, num_dn, 4]. None in infer
             - pos_embeds: List of multi pos embeds [bs, ci, hi, wi]
             - tgt: [bs, num_dn, d_model]. None in infer
-            
+
         """
         # prepare input for encoder
         src_flatten = []
@@ -269,18 +276,22 @@ class DeformableTransformer(nn.Module):
             mask = mask.flatten(1)  # bs, hw
             pos_embed = pos_embed.flatten(2).transpose(1, 2)  # bs, hw, c
             if self.num_feature_levels > 1 and self.level_embed is not None:
-                lvl_pos_embed = pos_embed + self.level_embed[lvl].view(1, 1, -1)
+                lvl_pos_embed = pos_embed + \
+                    self.level_embed[lvl].view(1, 1, -1)
             else:
                 lvl_pos_embed = pos_embed
             lvl_pos_embed_flatten.append(lvl_pos_embed)
             src_flatten.append(src)
             mask_flatten.append(mask)
-            
+
         src_flatten = torch.cat(src_flatten, 1)  # bs, \sum{hxw}, c
         mask_flatten = torch.cat(mask_flatten, 1)  # bs, \sum{hxw}
-        lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, 1)  # bs, \sum{hxw}, c
-        spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=src_flatten.device)
-        level_start_index = torch.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
+        lvl_pos_embed_flatten = torch.cat(
+            lvl_pos_embed_flatten, 1)  # bs, \sum{hxw}, c
+        spatial_shapes = torch.as_tensor(
+            spatial_shapes, dtype=torch.long, device=src_flatten.device)
+        level_start_index = torch.cat(
+            (spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
         valid_ratios = torch.stack([self.get_valid_ratio(m) for m in masks], 1)
 
         #########################################################
@@ -305,31 +316,37 @@ class DeformableTransformer(nn.Module):
         #########################################################
 
         assert self.two_stage_type == 'standard'
-        output_memory, output_proposals = gen_encoder_output_proposals(memory, mask_flatten, spatial_shapes)
+        output_memory, output_proposals = gen_encoder_output_proposals(
+            memory, mask_flatten, spatial_shapes)
         output_memory = self.enc_output_norm(self.enc_output(output_memory))
         bs, _, _ = output_memory.shape
 
         enc_outputs_class_unselected = self.enc_out_class_embed(output_memory)
-        enc_outputs_coord_unselected = self.enc_out_bbox_embed(output_memory) + output_proposals  # (bs, \sum{hw}, 4) unsigmoid
+        enc_outputs_coord_unselected = self.enc_out_bbox_embed(
+            output_memory) + output_proposals  # (bs, \sum{hw}, 4) unsigmoid
         topk = self.num_queries
-        topk_proposals = torch.topk(enc_outputs_class_unselected.max(-1)[0], topk, dim=1)[1]  # bs, nq
+        topk_proposals = torch.topk(
+            enc_outputs_class_unselected.max(-1)[0], topk, dim=1)[1]  # bs, nq
 
         # gather boxes
-        refpoint_embed_undetach = torch.gather(enc_outputs_coord_unselected, 1, 
+        refpoint_embed_undetach = torch.gather(enc_outputs_coord_unselected, 1,
                                                topk_proposals.unsqueeze(-1).repeat(1, 1, 4))  # unsigmoid
         refpoint_embed_ = refpoint_embed_undetach.detach()
         init_box_proposal = torch.gather(output_proposals, 1,
-                                        topk_proposals.unsqueeze(-1).repeat(1, 1, 4)).sigmoid()  # sigmoid
+                                         topk_proposals.unsqueeze(-1).repeat(1, 1, 4)).sigmoid()  # sigmoid
 
         # gather tgt
-        tgt_undetach = torch.gather(output_memory, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, self.d_model))
+        tgt_undetach = torch.gather(
+            output_memory, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, self.d_model))
         if self.embed_init_tgt:
-            tgt_ = self.tgt_embed.weight[:, None, :].repeat(1, bs, 1).transpose(0, 1)  # nq, bs, d_model
+            tgt_ = self.tgt_embed.weight[:, None, :].repeat(
+                1, bs, 1).transpose(0, 1)  # nq, bs, d_model
         else:
             tgt_ = tgt_undetach.detach()
 
         if refpoint_embed is not None:
-            refpoint_embed = torch.cat([refpoint_embed, refpoint_embed_], dim=1)
+            refpoint_embed = torch.cat(
+                [refpoint_embed, refpoint_embed_], dim=1)
             tgt = torch.cat([tgt, tgt_], dim=1)
         else:
             refpoint_embed, tgt = refpoint_embed_, tgt_
@@ -337,8 +354,8 @@ class DeformableTransformer(nn.Module):
         #########################################################
         # End preparing tgt
         # - tgt: bs, NQ, d_model
-        # - refpoint_embed(unsigmoid): bs, NQ, d_model 
-        ######################################################### 
+        # - refpoint_embed(unsigmoid): bs, NQ, d_model
+        #########################################################
 
         #########################################################
         # Begin Decoder
@@ -362,14 +379,14 @@ class DeformableTransformer(nn.Module):
 
         #########################################################
         # Begin postprocess
-        #########################################################     
+        #########################################################
         hs_enc = tgt_undetach.unsqueeze(0)
         ref_enc = refpoint_embed_undetach.sigmoid().unsqueeze(0)
         #########################################################
         # End postprocess
         # hs_enc: (n_enc+1, bs, nq, d_model) or (1, bs, nq, d_model) or (n_enc, bs, nq, d_model) or None
         # ref_enc: (n_enc+1, bs, nq, query_dim) or (1, bs, nq, query_dim) or (n_enc, bs, nq, d_model) or None
-        #########################################################        
+        #########################################################
 
         return hs, references, hs_enc, ref_enc, init_box_proposal
         # hs: (n_dec, bs, nq, d_model)
@@ -389,12 +406,14 @@ class TransformerEncoder(nn.Module):
                  num_queries=300,
                  deformable_encoder=True,
                  enc_layer_share=False,
-                 two_stage_type='no',  # ['no', 'standard', 'early', 'combine', 'enceachlayer', 'enclayer1']
+                 # ['no', 'standard', 'early', 'combine', 'enceachlayer', 'enclayer1']
+                 two_stage_type='no',
                  ):
         super().__init__()
         # prepare layers
         assert num_layers > 0
-        self.layers = _get_clones(encoder_layer, num_layers, layer_share=enc_layer_share)
+        self.layers = _get_clones(
+            encoder_layer, num_layers, layer_share=enc_layer_share)
         self.query_scale = None
         self.num_queries = num_queries
         self.deformable_encoder = deformable_encoder
@@ -413,8 +432,10 @@ class TransformerEncoder(nn.Module):
             H_, W_ = spatial_shapes[lvl][0], spatial_shapes[lvl][1]
             ref_y, ref_x = torch.meshgrid(torch.linspace(0.5, H_ - 0.5, H_, dtype=torch.float32, device=device),
                                           torch.linspace(0.5, W_ - 0.5, W_, dtype=torch.float32, device=device))
-            ref_y = ref_y.reshape(-1)[None] / (valid_ratios[:, None, lvl, 1] * H_)
-            ref_x = ref_x.reshape(-1)[None] / (valid_ratios[:, None, lvl, 0] * W_)
+            ref_y = ref_y.reshape(-1)[None] / \
+                (valid_ratios[:, None, lvl, 1] * H_)
+            ref_x = ref_x.reshape(-1)[None] / \
+                (valid_ratios[:, None, lvl, 0] * W_)
             ref = torch.stack([ref_x, ref_y], -1)
             reference_points_list.append(ref)
 
@@ -448,7 +469,8 @@ class TransformerEncoder(nn.Module):
         """
         assert ref_token_index is None
         output = src
-        reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=src.device)
+        reference_points = self.get_reference_points(
+            spatial_shapes, valid_ratios, device=src.device)
 
         # main process
         for layer_id, layer in enumerate(self.layers):
@@ -488,17 +510,20 @@ class TransformerDecoder(nn.Module):
         super().__init__()
         assert num_layers > 0
         assert deformable_decoder is True
-        self.layers = _get_clones(decoder_layer, num_layers, layer_share=dec_layer_share)
+        self.layers = _get_clones(
+            decoder_layer, num_layers, layer_share=dec_layer_share)
         self.num_layers = num_layers
         self.norm = norm
         self.return_intermediate = return_intermediate
         assert return_intermediate, "support return_intermediate only"
         self.query_dim = query_dim
-        assert query_dim in [2, 4], "query_dim should be 2/4 but {}".format(query_dim)
+        assert query_dim in [
+            2, 4], "query_dim should be 2/4 but {}".format(query_dim)
         self.num_feature_levels = num_feature_levels
         self.use_detached_boxes_dec_out = use_detached_boxes_dec_out
 
-        self.ref_point_head = MLP(query_dim // 2 * d_model, d_model, d_model, 2)
+        self.ref_point_head = MLP(
+            query_dim // 2 * d_model, d_model, d_model, 2)
         self.query_pos_sine_scale = None
 
         self.query_scale = None
@@ -521,17 +546,14 @@ class TransformerDecoder(nn.Module):
     def forward(self,
                 tgt,
                 memory,
-                tgt_mask: Tensor = None,
-                memory_mask: Tensor = None,
-                tgt_key_padding_mask: Tensor = None,
-                memory_key_padding_mask: Tensor = None,
-                pos: Tensor = None,
-                refpoints_unsigmoid: Tensor = None,  # num_queries, bs, 2
+                tgt_mask,
+                memory_key_padding_mask,
+                pos,
+                refpoints_unsigmoid,  # num_queries, bs, 2
                 # for memory
-                level_start_index: Tensor = None,  # num_levels
-                spatial_shapes: Tensor = None,  # bs, num_levels, 2
-                valid_ratios: Tensor = None,
-
+                level_start_index,  # num_levels
+                spatial_shapes,  # bs, num_levels, 2
+                valid_ratios,
                 ):
         """
         Input:
@@ -550,20 +572,24 @@ class TransformerDecoder(nn.Module):
         for layer_id, layer in enumerate(self.layers):
             # preprocess ref points
             if self.training and self.decoder_query_perturber is not None and layer_id != 0:
-                reference_points = self.decoder_query_perturber(reference_points)
+                reference_points = self.decoder_query_perturber(
+                    reference_points)
 
             if reference_points.shape[-1] == 4:
                 reference_points_input = reference_points[:, :, None] \
-                                         * torch.cat([valid_ratios, valid_ratios], -1)[None, :]  # nq, bs, nlevel, 4
+                    * torch.cat([valid_ratios, valid_ratios], -1)[None, :]  # nq, bs, nlevel, 4
             else:
                 assert reference_points.shape[-1] == 2
-                reference_points_input = reference_points[:, :, None] * valid_ratios[None, :]
-            query_sine_embed = gen_sineembed_for_position(reference_points_input[:, :, 0, :])  # nq, bs, 256*2
-
+                reference_points_input = reference_points[:,
+                                                          :, None] * valid_ratios[None, :]
+            query_sine_embed = gen_sineembed_for_position(
+                reference_points_input[:, :, 0, :])  # nq, bs, 256*2
 
             # conditional query
-            raw_query_pos = self.ref_point_head(query_sine_embed)  # nq, bs, 256
-            pos_scale = self.query_scale(output) if self.query_scale is not None else 1
+            raw_query_pos = self.ref_point_head(
+                query_sine_embed)  # nq, bs, 256
+            pos_scale = self.query_scale(
+                output) if self.query_scale is not None else 1
             query_pos = pos_scale * raw_query_pos
 
             # random drop some layers if needed
@@ -571,7 +597,6 @@ class TransformerDecoder(nn.Module):
                 tgt=output,
                 tgt_query_pos=query_pos,
                 tgt_query_sine_embed=query_sine_embed,
-                tgt_key_padding_mask=tgt_key_padding_mask,
                 tgt_reference_points=reference_points_input,
 
                 memory=memory,
@@ -581,16 +606,15 @@ class TransformerDecoder(nn.Module):
                 memory_pos=pos,
 
                 self_attn_mask=tgt_mask,
-                cross_attn_mask=memory_mask
             )
-
 
             # iter update
             if self.bbox_embed is not None:
                 reference_before_sigmoid = inverse_sigmoid(reference_points)
 
                 # delta_unsig = self.bbox_embed[layer_id](output)
-                delta_unsigs = [bbox_embed(output) for bbox_embed in self.bbox_embed]
+                delta_unsigs = [bbox_embed(output)
+                                for bbox_embed in self.bbox_embed]
                 delta_unsig = delta_unsigs[layer_id]
 
                 outputs_unsig = delta_unsig + reference_before_sigmoid
@@ -703,13 +727,15 @@ class DeformableTransformerDecoderLayer(nn.Module):
         self.norm1 = nn.LayerNorm(d_model)
 
         # self attention
-        self.self_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout)
+        self.self_attn = nn.MultiheadAttention(
+            d_model, n_heads, dropout=dropout)
         self.dropout2 = nn.Dropout(dropout)
         self.norm2 = nn.LayerNorm(d_model)
 
         # ffn
         self.linear1 = nn.Linear(d_model, d_ffn)
-        self.activation = _get_activation_fn(activation, d_model=d_ffn, batch_dim=1)
+        self.activation = _get_activation_fn(
+            activation, d_model=d_ffn, batch_dim=1)
         self.dropout3 = nn.Dropout(dropout)
         self.linear2 = nn.Linear(d_ffn, d_model)
         self.dropout4 = nn.Dropout(dropout)
@@ -768,9 +794,11 @@ class DeformableTransformerDecoderLayer(nn.Module):
             elif self.key_aware_type == 'proj_mean':
                 tgt = tgt + self.key_aware_proj(memory).mean(0, keepdim=True)
             else:
-                raise NotImplementedError("Unknown key_aware_type: {}".format(self.key_aware_type))
+                raise NotImplementedError(
+                    "Unknown key_aware_type: {}".format(self.key_aware_type))
         tgt2 = self.cross_attn(self.with_pos_embed(tgt, tgt_query_pos).transpose(0, 1),
-                               tgt_reference_points.transpose(0, 1).contiguous(),
+                               tgt_reference_points.transpose(
+                                   0, 1).contiguous(),
                                memory.transpose(0, 1),
                                memory_spatial_shapes,
                                memory_level_start_index,
@@ -785,7 +813,6 @@ class DeformableTransformerDecoderLayer(nn.Module):
                 tgt,  # nq, bs, d_model
                 tgt_query_pos,  # pos for query. MLP(Sine(pos))
                 tgt_query_sine_embed,  # pos for query. Sine(pos)
-                tgt_key_padding_mask,
                 tgt_reference_points,  # nq, bs, 4
 
                 # for memory
@@ -797,7 +824,6 @@ class DeformableTransformerDecoderLayer(nn.Module):
 
                 # sa
                 self_attn_mask,  # mask used for self-attention
-                cross_attn_mask,  # mask used for cross-attention
                 ):
 
         for funcname in self.module_seq:

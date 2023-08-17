@@ -22,9 +22,8 @@ from torch import nn
 from torchvision.ops.boxes import nms
 
 from dino.util import box_ops
-from dino.util.misc import (NestedTensor, nested_tensor_from_tensor_list,
-                       accuracy, get_world_size, interpolate,
-                       is_dist_avail_and_initialized, inverse_sigmoid)
+from dino.util.misc import (NestedTensor, nested_tensor_from_tensor_list, accuracy, get_world_size, 
+                            interpolate, is_dist_avail_and_initialized, inverse_sigmoid, flatten_dict)
 
 from .backbone import build_backbone
 from .matcher import build_matcher
@@ -57,6 +56,7 @@ class DINO(nn.Module):
                     dn_box_noise_scale = 0.4,
                     dn_label_noise_ratio = 0.5,
                     dn_labelbook_size = 100,
+                    flatten_output=False,
                     ):
         """ Initializes the model.
         Parameters:
@@ -79,6 +79,7 @@ class DINO(nn.Module):
         self.num_feature_levels = num_feature_levels
         self.nheads = nheads
         self.label_enc = nn.Embedding(dn_labelbook_size + 1, hidden_dim)
+        self.flatten_output = flatten_output
 
         # setting query dim
         self.query_dim = query_dim
@@ -289,7 +290,6 @@ class DINO(nn.Module):
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord_list)
 
-
         # for encoder output
         if hs_enc is not None:
             # prepare intermediate outputs
@@ -317,7 +317,10 @@ class DINO(nn.Module):
 
         out['dn_meta'] = dn_meta
 
-        return out
+        if self.flatten_output:
+            return out['pred_logits'], out['pred_boxes'], 
+        else:
+            return out
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord):
