@@ -14,6 +14,7 @@ from pathlib import Path
 import random
 import os
 
+
 import torch
 import torch.utils.data
 import torchvision
@@ -546,7 +547,12 @@ def make_coco_transforms(image_set, fix_size=False, strong_aug=False, args=None)
             normalize,
         ])
 
-
+    if image_set == 'export':
+        return torchvision.transforms.Compose([
+            torchvision.transforms.Resize((750, 1333)),
+            torchvision.transforms.ToTensor(),
+            torchvision.transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
 
     raise ValueError(f'unknown {image_set}')
 
