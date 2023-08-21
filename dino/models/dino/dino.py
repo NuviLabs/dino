@@ -95,6 +95,7 @@ class DINO(nn.Module):
         self.dn_labelbook_size = dn_labelbook_size
 
         self.flatten_output = flatten_output
+        self.augmentation = None
 
         # prepare input projection layers
         if num_feature_levels > 1:
@@ -236,6 +237,9 @@ class DINO(nn.Module):
                - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
                                 dictionnaries containing the two above keys for each decoder layer.
         """
+        if self.augmentation is not None:
+            samples = self.augmentation(samples)
+
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
         features, poss = self.backbone(samples)
