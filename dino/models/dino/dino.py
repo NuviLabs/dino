@@ -57,6 +57,7 @@ class DINO(nn.Module):
                     dn_box_noise_scale = 0.4,
                     dn_label_noise_ratio = 0.5,
                     dn_labelbook_size = 100,
+                    flatten_output = False,
                     ):
         """ Initializes the model.
         Parameters:
@@ -92,6 +93,8 @@ class DINO(nn.Module):
         self.dn_box_noise_scale = dn_box_noise_scale
         self.dn_label_noise_ratio = dn_label_noise_ratio
         self.dn_labelbook_size = dn_labelbook_size
+
+        self.flatten_output = flatten_output
 
         # prepare input projection layers
         if num_feature_levels > 1:
@@ -319,7 +322,10 @@ class DINO(nn.Module):
 
         out['dn_meta'] = dn_meta
 
-        return out
+        if self.flatten_output:
+            return out['pred_logits'], out['pred_boxes']
+        else:
+            return out
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord):
@@ -729,6 +735,10 @@ def build_dino(args):
         dec_pred_bbox_embed_share = args.dec_pred_bbox_embed_share
     except:
         dec_pred_bbox_embed_share = True
+    try:
+        flatten_output = args.flatten_output
+    except:
+        flatten_output = False
 
     model = DINO(
         backbone,
@@ -755,6 +765,7 @@ def build_dino(args):
         dn_box_noise_scale = args.dn_box_noise_scale,
         dn_label_noise_ratio = args.dn_label_noise_ratio,
         dn_labelbook_size = dn_labelbook_size,
+        flatten_output = flatten_output,
     )
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
