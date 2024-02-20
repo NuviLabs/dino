@@ -17,6 +17,7 @@ import os
 
 import torch
 import torch.utils.data
+import torch.nn as nn
 import torchvision
 from pycocotools import mask as coco_mask
 
@@ -548,10 +549,10 @@ def make_coco_transforms(image_set, fix_size=False, strong_aug=False, args=None)
         ])
 
     if image_set == 'export':
-        return torchvision.transforms.Compose([
+        return nn.Sequential(
             torchvision.transforms.Resize((750, 1333)),
             torchvision.transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ])
+        )
 
     raise ValueError(f'unknown {image_set}')
 
