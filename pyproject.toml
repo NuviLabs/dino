@@ -15,7 +15,7 @@ scipy = "1.8.1"
 panopticapi = {git = "https://github.com/cocodataset/panopticapi.git"}
 cython = "^0.29.35"
 submitit = "^1.4.5"
-termcolor = "^2.3.0"
+termcolor = "^1.1.0"
 addict = "^2.4.0"
 yapf = "^0.40.1"
 timm = "^0.9.2"
